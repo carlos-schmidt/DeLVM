@@ -43,41 +43,38 @@ class DeLVM:
         return reconstructed_image
 
     def inference(self, batched_images):
-        """Given a batch of images in the form of:
-        [
-            {ctx_in_1, ctx_gt_1, ctx_in_2, ctx_gt_2, ..., prompt_in}
-        ]
+        """Given a batch of images in the form of: batch_size, n_images = (b,n), returns the generated images by DeLVM.
 
-        returns the generated images by DeLVM.
+        The images will get resized to (256,256) before the encoding step.
 
         Args:
-            imgs (numpy array (b,n,c,h,w)): batch of length b with n-1 context images each and 1 prompt
+            imgs (list(list(image)) (b,n)): batch of length b with n-1 context images each and 1 prompt
         """
         batch_size = len(batched_images)
 
-        # Resize (256, bilinear) -> CenterCrop -> ToTensor(0..256->0..1)
-        seq_prompt = []
+        # ------------------------------------------------------------------------------------------------------#
+        # -------------------------------------------- transform  ----------------------------------------------#
+        # --------------------------------------------    and     ----------------------------------------------#
+        # --------------------------------------------   encode   ----------------------------------------------#
+        # ------------------------------------------------------------------------------------------------------#
+
+        vqgan_ids = []
         for batch in batched_images:
             # n,c,h,w
             transformed_batch = []
             for img in batch:
+                # Resize (256, bilinear) -> CenterCrop -> ToTensor(0..256->0..1)
+                img = encode_transform(img).to(self.device)
                 # c,h,w
-                img = encode_transform(img)
-                img = img[0:3, :, :].to(self.device)
                 transformed_batch.append(img)
-            transformed_batch = torch.stack(transformed_batch)
-            seq_prompt.append(transformed_batch)
+            # n,c,h,w
+            batch_tensor = torch.stack(transformed_batch)
+
+            _, indices = self.vqgan.encode(batch_tensor)
+
+            vqgan_ids.append(indices)
 
         # seq_prompt is batch of n transformed images on device.
-
-        # ------------------------------------------------------------------------------------------------------#
-        # --------------------------------------------   encode   ----------------------------------------------#
-        # ------------------------------------------------------------------------------------------------------#
-        vqgan_ids = []
-        for batch in seq_prompt:
-            # pixels -> indices
-            _, indices = self.vqgan.encode(batch)
-            vqgan_ids.append(indices)
 
         vqgan_ids = torch.stack(vqgan_ids)
         vqgan_ids = torch.flatten(vqgan_ids, 1, 2)
@@ -124,57 +121,61 @@ class DeLVM:
         # now, output_images are of type PIL.Image.Image
         return output_images
 
+if __name__ == "__main__":
+    import os
+    from PIL import Image
+    import matplotlib.pyplot as plt
 
-import os
-from PIL import Image
-import matplotlib.pyplot as plt
+    import warnings
 
-import warnings
+    warnings.filterwarnings("ignore")  # TODO careful with that
 
-warnings.filterwarnings("ignore")  # TODO careful with that
+    prompt_path_1 = "./InternLM/tools/data/seg_prompt_1"  # path to prompt 1
+    prompt_path_2 = "./InternLM/tools/data/seg_prompt_2"  # path to prompt 2
+    lvm_path = "./models/llama_300m_hf"  # path to converted hf model
+    vqgan_path = "./models/vqgan-f16-8192-laion"  # path to vqgan model
 
-prompt_path_1 = "./InternLM/tools/data/seg_prompt_1"  # path to prompt 1
-prompt_path_2 = "./InternLM/tools/data/seg_prompt_2"  # path to prompt 2
-lvm_path = "./models/llama_300m_hf"  # path to converted hf model
-vqgan_path = "./models/vqgan-f16-8192-laion"  # path to vqgan model
+    # prepare prompt 1
+    img_names_1 = os.listdir(prompt_path_1)
+    img_names_1 = sorted(img_names_1)
 
-# prepare prompt 1
-img_names_1 = os.listdir(prompt_path_1)
-img_names_1 = sorted(img_names_1)
+    seq_prompt_1 = []
+    for i, img_name in enumerate(img_names_1):
+        # print('prompt: ', img_name)
+        img_path = os.path.join(prompt_path_1, img_name)
 
-seq_prompt_1 = []
-for i, img_name in enumerate(img_names_1):
-    # print('prompt: ', img_name)
-    img_path = os.path.join(prompt_path_1, img_name)
+        image = Image.open(img_path)
+        seq_prompt_1.append(image)
 
-    image = Image.open(img_path)
-    seq_prompt_1.append(image)
+    batch = [seq_prompt_1]
 
-batch = [seq_prompt_1]
+    # prepare prompt 2
+    img_names_2 = os.listdir(prompt_path_2)
+    img_names_2 = sorted(img_names_2)
 
-# prepare prompt 2
-img_names_2 = os.listdir(prompt_path_2)
-img_names_2 = sorted(img_names_2)
+    seq_prompt_2 = []
+    for i, img_name in enumerate(img_names_2):
+        img_path = os.path.join(prompt_path_2, img_name)
 
-seq_prompt_2 = []
-for i, img_name in enumerate(img_names_2):
-    img_path = os.path.join(prompt_path_2, img_name)
+        image = Image.open(img_path)
+        seq_prompt_2.append(image)
 
-    image = Image.open(img_path)
-    seq_prompt_2.append(image)
+    batch.append(seq_prompt_2)
 
-batch.append(seq_prompt_2)
+    delvm = DeLVM(vqgan_path=vqgan_path, llama_path=lvm_path, device="cpu")
 
-delvm = DeLVM(vqgan_path=vqgan_path, llama_path=lvm_path, device="cpu")
+    outputs = delvm.inference(batch)
 
-outputs = delvm.inference(batch)
+    try:
+        print(torch.max(outputs[0]), torch.min(outputs[0]))
+    except TypeError:
+        print(type(outputs[0]))
+    # From here on is only validation that we have the correct output
+    outputs = [Image.fromarray(o) for o in outputs]
 
-# From here on is only validation that we have the correct output
-outputs = [Image.fromarray(o) for o in outputs]
+    fig, axes = plt.subplots(len(outputs), 2, figsize=(8, 4))
 
-fig, axes = plt.subplots(len(outputs), 2, figsize=(8, 4))
+    [axes[k, 0].imshow(batch[k][-1]) for k in range(len(batch))]
+    [axes[k, 1].imshow(outputs[k]) for k in range(len(outputs))]
 
-[axes[k,0].imshow(batch[k][-1]) for k in range(len(batch))]
-[axes[k,1].imshow(outputs[k]) for k in range(len(outputs))]
-
-plt.show()
+    plt.show()
