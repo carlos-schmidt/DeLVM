@@ -94,7 +94,7 @@ def load_state_dict(checkpoint_file: Union[str, os.PathLike]):
     """
     try:
         if os.path.basename(checkpoint_file) == WEIGHTS_NAME:
-            return torch.load(checkpoint_file, map_location="cpu")
+            return torch.load(checkpoint_file, map_location="cpu", weights_only=True)
     except Exception as e:
         try:
             with open(checkpoint_file) as f:
