@@ -1,0 +1,16 @@
+name: delvm
+channels:
+  - pytorch
+  - defaults
+dependencies:
+  - python=3.12.7
+  - pytorch=2.5.1=py3.12_cpu_0
+  - pillow=10.4.0
+  - pip=24.2
+  - transformers=4.45.2
+  - torchvision=0.20.1=py312_cpu
+  - matplotlib
+  - jupyter
+  - pip:
+      - accelerate==1.0.1
+      - gdown==5.2.0
