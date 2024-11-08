@@ -1,0 +1,2 @@
+images are from pascal-voc 2012
+model is fed first 1..n-2 images, produces the last image and image n-1 is the ground truth

@@ -1,8 +1,22 @@
 import torch
 import numpy as np
 from transformers import AutoModel, GenerationConfig
-from InternLM.tools.model_hf.muse import VQGANModel
-from InternLM.tools.utils import encode_transform
+from modeling_taming_vqgan import VQGANModel
+from torchvision.transforms import (
+    Compose,
+    Resize,
+    CenterCrop,
+    InterpolationMode,
+    ToTensor,
+)
+
+encode_transform = Compose(
+    [
+        Resize(256, interpolation=InterpolationMode.BILINEAR),
+        CenterCrop(256),
+        ToTensor(),
+    ]
+)
 
 
 class DeLVM:
@@ -120,27 +134,27 @@ class DeLVM:
         # ------------------------------------------------------------------------------------------------------#
 
         # since "pixels" are still roughly in range[0,1], convert to 0..255
-        output_images = self._convert_decode_to_pil(output_images)
+        # output_images = self._convert_decode_to_pil(output_images)
 
         # now, output_images are of type PIL.Image.Image
         return output_images
 
 
 if __name__ == "__main__":
-    from PIL import Image
-    import matplotlib.pyplot as plt
-    import torchvision
-    from dataset import InteractiveDataset
-    from torchvision.transforms.functional import to_pil_image
-    from torch.utils.data import DataLoader
 
     lvm_path = "./models/llama_300m_hf"  # path to converted hf model
     vqgan_path = "./models/vqgan-f16-8192-laion"  # path to vqgan model
+    model = DeLVM(vqgan_path=vqgan_path, llama_path=lvm_path, device="cpu")
 
-    resize = torchvision.transforms.Compose(
+    from dataset import InteractiveDataset
+    from torchvision.transforms.functional import to_pil_image
+    from torch.utils.data import DataLoader
+    from os import makedirs
+
+    resize = Compose(
         [
-            torchvision.transforms.Resize((256, 256)),
-            torchvision.transforms.ToTensor(),
+            Resize((256, 256), interpolation=InterpolationMode.BILINEAR),
+            ToTensor(),
         ]
     )
 
@@ -152,18 +166,16 @@ if __name__ == "__main__":
     )
     dataloader = DataLoader(dataset, batch_size=3, shuffle=True, num_workers=0)
 
-    model = DeLVM(vqgan_path=vqgan_path, llama_path=lvm_path, device="cpu")
-
     for i, batch in enumerate(dataloader):
         model_input = []
         for image, gt in zip(*batch.values()):
             model_input.append(image)
             model_input.append(gt)
 
-        for image in model_input:
-            to_pil_image(image).show()
         # remove last gt
-        model_input = torch.stack(model_input[:-1])
-        outputs = model.inference([model_input])
-        to_pil_image(outputs[0]).show()
-        input("show next")
+        outputs = model.inference([torch.stack(model_input[:-1])])
+
+        model_input.append(outputs[0])
+        catted = torch.cat(model_input, dim=2)
+        makedirs("./interactive_demo/", exist_ok=True)
+        to_pil_image(catted).save(f"./interactive_demo/{i}.png")
