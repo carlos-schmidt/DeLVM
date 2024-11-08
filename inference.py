@@ -60,15 +60,19 @@ class DeLVM:
 
         vqgan_ids = []
         for batch in batched_images:
-            # n,c,h,w
-            transformed_batch = []
-            for img in batch:
-                # Resize (256, bilinear) -> CenterCrop -> ToTensor(0..256->0..1)
-                img = encode_transform(img).to(self.device)
-                # c,h,w
-                transformed_batch.append(img)
-            # n,c,h,w
-            batch_tensor = torch.stack(transformed_batch)
+            if type(batch) is not torch.Tensor:
+                # n,c,h,w
+                transformed_batch = []
+                for img in batch:
+                    # Resize (256, bilinear) -> CenterCrop -> ToTensor(0..256->0..1)
+                    img = encode_transform(img).to(self.device)
+                    # c,h,w
+                    transformed_batch.append(img)
+                # n,c,h,w
+                batch_tensor = torch.stack(transformed_batch)
+            else:
+                # We already transformed!
+                batch_tensor = batch
 
             _, indices = self.vqgan.encode(batch_tensor)
 
@@ -121,61 +125,45 @@ class DeLVM:
         # now, output_images are of type PIL.Image.Image
         return output_images
 
+
 if __name__ == "__main__":
-    import os
     from PIL import Image
     import matplotlib.pyplot as plt
+    import torchvision
+    from dataset import InteractiveDataset
+    from torchvision.transforms.functional import to_pil_image
+    from torch.utils.data import DataLoader
 
-    import warnings
-
-    warnings.filterwarnings("ignore")  # TODO careful with that
-
-    prompt_path_1 = "./InternLM/tools/data/seg_prompt_1"  # path to prompt 1
-    prompt_path_2 = "./InternLM/tools/data/seg_prompt_2"  # path to prompt 2
     lvm_path = "./models/llama_300m_hf"  # path to converted hf model
     vqgan_path = "./models/vqgan-f16-8192-laion"  # path to vqgan model
 
-    # prepare prompt 1
-    img_names_1 = os.listdir(prompt_path_1)
-    img_names_1 = sorted(img_names_1)
+    resize = torchvision.transforms.Compose(
+        [
+            torchvision.transforms.Resize((256, 256)),
+            torchvision.transforms.ToTensor(),
+        ]
+    )
 
-    seq_prompt_1 = []
-    for i, img_name in enumerate(img_names_1):
-        # print('prompt: ', img_name)
-        img_path = os.path.join(prompt_path_1, img_name)
+    dataset = InteractiveDataset(
+        "/home/carlos/VOC2012",
+        "InteractionsMerged",
+        "SegmentationSingleObjects",
+        transform=resize,
+    )
+    dataloader = DataLoader(dataset, batch_size=3, shuffle=True, num_workers=0)
 
-        image = Image.open(img_path)
-        seq_prompt_1.append(image)
+    model = DeLVM(vqgan_path=vqgan_path, llama_path=lvm_path, device="cpu")
 
-    batch = [seq_prompt_1]
+    for i, batch in enumerate(dataloader):
+        model_input = []
+        for image, gt in zip(*batch.values()):
+            model_input.append(image)
+            model_input.append(gt)
 
-    # prepare prompt 2
-    img_names_2 = os.listdir(prompt_path_2)
-    img_names_2 = sorted(img_names_2)
-
-    seq_prompt_2 = []
-    for i, img_name in enumerate(img_names_2):
-        img_path = os.path.join(prompt_path_2, img_name)
-
-        image = Image.open(img_path)
-        seq_prompt_2.append(image)
-
-    batch.append(seq_prompt_2)
-
-    delvm = DeLVM(vqgan_path=vqgan_path, llama_path=lvm_path, device="cpu")
-
-    outputs = delvm.inference(batch)
-
-    try:
-        print(torch.max(outputs[0]), torch.min(outputs[0]))
-    except TypeError:
-        print(type(outputs[0]))
-    # From here on is only validation that we have the correct output
-    outputs = [Image.fromarray(o) for o in outputs]
-
-    fig, axes = plt.subplots(len(outputs), 2, figsize=(8, 4))
-
-    [axes[k, 0].imshow(batch[k][-1]) for k in range(len(batch))]
-    [axes[k, 1].imshow(outputs[k]) for k in range(len(outputs))]
-
-    plt.show()
+        for image in model_input:
+            to_pil_image(image).show()
+        # remove last gt
+        model_input = torch.stack(model_input[:-1])
+        outputs = model.inference([model_input])
+        to_pil_image(outputs[0]).show()
+        input("show next")
